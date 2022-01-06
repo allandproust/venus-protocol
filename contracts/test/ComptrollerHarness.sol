@@ -17,6 +17,7 @@ contract ComptrollerRopsten is Comptroller {
 
 contract ComptrollerHarness is Comptroller {
     address xvsAddress;
+    address vXVSAddress;
     uint public blockNumber;
 
     constructor() Comptroller() public {}
@@ -41,6 +42,14 @@ contract ComptrollerHarness is Comptroller {
 
     function getXVSAddress() public view returns (address) {
         return xvsAddress;
+    }
+
+    function setXVSVTokenAddress(address vXVSAddress_) public {
+        vXVSAddress = vXVSAddress_;
+    }
+
+    function getXVSVTokenAddress() public view returns (address) {
+        return vXVSAddress;
     }
 
     /**
