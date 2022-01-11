@@ -102,12 +102,12 @@ contract ComptrollerHarness is Comptroller {
 
     function harnessDistributeAllBorrowerVenus(address vToken, address borrower, uint marketBorrowIndexMantissa) public {
         distributeBorrowerVenus(vToken, borrower, Exp({mantissa: marketBorrowIndexMantissa}));
-        venusAccrued[borrower] = grantXVSInternal(borrower, venusAccrued[borrower]);
+        venusAccrued[borrower] = grantXVSInternal(borrower, venusAccrued[borrower], 0, false);
     }
 
     function harnessDistributeAllSupplierVenus(address vToken, address supplier) public {
         distributeSupplierVenus(vToken, supplier);
-        venusAccrued[supplier] = grantXVSInternal(supplier, venusAccrued[supplier]);
+        venusAccrued[supplier] = grantXVSInternal(supplier, venusAccrued[supplier], 0, false);
     }
 
     function harnessUpdateVenusBorrowIndex(address vToken, uint marketBorrowIndexMantissa) public {
@@ -128,7 +128,7 @@ contract ComptrollerHarness is Comptroller {
 
     function harnessTransferVenus(address user, uint userAccrued, uint threshold) public returns (uint) {
         if (userAccrued > 0 && userAccrued >= threshold) {
-            return grantXVSInternal(user, userAccrued);
+            return grantXVSInternal(user, userAccrued, 0, false);
         }
         return userAccrued;
     }

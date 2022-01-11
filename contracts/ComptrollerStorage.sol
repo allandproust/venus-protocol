@@ -3,6 +3,7 @@ pragma solidity ^0.5.16;
 import "./VToken.sol";
 import "./PriceOracle.sol";
 import "./VAIControllerInterface.sol";
+import "./ComptrollerLensInterface.sol";
 
 contract UnitrollerAdminStorage {
     /**
@@ -193,4 +194,8 @@ contract ComptrollerV6Storage is ComptrollerV5Storage {
   uint256 public floatRateMantissa;
   /// @notice Address receiver VAI
   address public receiver;
+}
+
+contract ComptrollerV7Storage is ComptrollerV6Storage {
+    ComptrollerLensInterface public comptrollerLens;
 }

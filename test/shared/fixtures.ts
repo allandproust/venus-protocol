@@ -2,6 +2,7 @@ import { BigNumber, Wallet } from 'ethers'
 import { ethers } from 'hardhat'
 import { Unitroller } from '../../typechain/Unitroller'
 import { ComptrollerHarness } from '../../typechain/ComptrollerHarness'
+import { ComptrollerLensInterface } from '../../typechain/ComptrollerLensInterface';
 import { SimplePriceOracle } from '../../typechain/SimplePriceOracle'
 import { XVS } from '../../typechain/XVS'
 import { VAIScenario } from '../../typechain/VAIScenario'
@@ -42,6 +43,7 @@ async function testTokensFixture(): Promise<TestTokensFixture> {
 
 interface ComptrollerFixture extends TestTokensFixture {
     comptroller: ComptrollerHarness
+    comptrollerLens: ComptrollerLensInterface
     priceOracle: SimplePriceOracle
     xvs: XVS
     vai: VAIScenario
@@ -52,6 +54,9 @@ interface ComptrollerFixture extends TestTokensFixture {
 export const comptrollerFixture: Fixture<ComptrollerFixture> = async function ([wallet, treasuryGuardian, treasuryAddress]: Wallet[]): Promise<ComptrollerFixture> {
     // const unitrollerFactory =  await ethers.getContractFactory('Unitroller')
     // const unitroller = (await unitrollerFactory.deploy()) as Unitroller
+    const comptrollerLensFactory = await ethers.getContractFactory('ComptrollerLens');
+    const comptrollerLens = (await comptrollerLensFactory.deploy()) as ComptrollerLensInterface;
+
     const { usdt } = await testTokensFixture();
     const comptrollerFactory = await ethers.getContractFactory('ComptrollerHarness');
     const comptroller = (await comptrollerFactory.deploy()) as ComptrollerHarness
@@ -92,6 +97,8 @@ export const comptrollerFixture: Fixture<ComptrollerFixture> = async function ([
     // console.log('=========_setCloseFactor==========')
     await comptroller._setPriceOracle(priceOracle.address)
     // console.log('=========_setPriceOracle==========')
+    await comptroller._setComptrollerLens(comptrollerLens.address);
+    // console.log('=========_setComptrollerLens==========')
     await comptroller.setXVSAddress(xvs.address)
     // console.log('=========setXVSAddress==========')
     await vaiController.setVAIAddress(vai.address)
@@ -128,5 +135,5 @@ export const comptrollerFixture: Fixture<ComptrollerFixture> = async function ([
     await priceOracle.setDirectPrice(vai.address, bigNumber18)
     await comptroller._supportMarket(vusdt.address)
 
-    return { usdt, comptroller, priceOracle, xvs, vai, vaiController, vusdt };
+    return { usdt, comptroller, comptrollerLens, priceOracle, xvs, vai, vaiController, vusdt };
 }

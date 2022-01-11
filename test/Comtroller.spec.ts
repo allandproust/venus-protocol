@@ -9,6 +9,7 @@ import { BEP20Harness } from '../typechain/BEP20Harness'
 import { VBep20Harness } from '../typechain/VBep20Harness'
 import { expect } from './shared/expect'
 import { comptrollerFixture, bigNumber18, bigNumber17, bigNumber16 } from './shared/fixtures'
+import { ComptrollerLensInterface } from '../typechain/ComptrollerLensInterface'
 
 const createFixtureLoader = waffle.createFixtureLoader
 
@@ -21,6 +22,7 @@ describe('Comptroller', async () => {
 
     let comptroller: ComptrollerHarness
     let priceOracle: SimplePriceOracle
+    let comptrollerLens: ComptrollerLensInterface
     let xvs: XVS
     let vai: VAIScenario
     let vaiController: VAIControllerHarness
@@ -35,7 +37,7 @@ describe('Comptroller', async () => {
     })
 
     beforeEach('deploy Comptroller', async () => {
-        ; ({ usdt, comptroller, priceOracle, xvs, vai, vaiController, vusdt } = await loadFixTure(comptrollerFixture));
+        ; ({ usdt, comptroller, comptrollerLens, priceOracle, xvs, vai, vaiController, vusdt } = await loadFixTure(comptrollerFixture));
         await vusdt.harnessSetBalance(user1.address, bigNumber18.mul(100))
         await comptroller.connect(user1).enterMarkets([vusdt.address])
     })
@@ -178,21 +180,21 @@ describe('Comptroller', async () => {
 
     describe('#getVAIRepayRate', async () => {
         it('success for zero baseRate', async () => {
-            let res = await comptroller.getVAIRepayRate()
+            let res = await comptrollerLens.getVAIRepayRate(comptroller.address)
             expect(res).to.eq(bigNumber18)
         })
 
         it('success for baseRate 0.1 floatRate 0.1 vaiPirce 1e18', async () => {
             await comptroller._setBaseRate(bigNumber17)
             await comptroller._setFloatRate(bigNumber17)
-            expect(await comptroller.getVAIRepayRate()).to.eq(bigNumber17.mul(11))
+            expect(await comptrollerLens.getVAIRepayRate(comptroller.address)).to.eq(bigNumber17.mul(11))
         })
 
         it('success for baseRate 0.1 floatRate 0.1 vaiPirce 0.5 * 1e18', async () => {
             await comptroller._setBaseRate(bigNumber17)
             await comptroller._setFloatRate(bigNumber17)
             await priceOracle.setDirectPrice(vai.address, bigNumber17.mul(5))
-            expect(await comptroller.getVAIRepayRate()).to.eq(bigNumber16.mul(115))
+            expect(await comptrollerLens.getVAIRepayRate(comptroller.address)).to.eq(bigNumber16.mul(115))
         })
     })
 
@@ -204,20 +206,20 @@ describe('Comptroller', async () => {
         })
 
         it('success for zero rate', async () => {
-            expect(await comptroller.getVAIRepayAmount(user1.address)).to.eq(bigNumber18.mul(100))
+            expect(await comptrollerLens.getVAIRepayAmount(comptroller.address, user1.address)).to.eq(bigNumber18.mul(100))
         })
 
         it('success for baseRate 0.1 floatRate 0.1 vaiPirce 1e18', async () => {
             await comptroller._setBaseRate(bigNumber17)
             await comptroller._setFloatRate(bigNumber17)
-            expect(await comptroller.getVAIRepayAmount(user1.address)).to.eq(bigNumber18.mul(110))
+            expect(await comptrollerLens.getVAIRepayAmount(comptroller.address, user1.address)).to.eq(bigNumber18.mul(110))
         })
 
         it('success for baseRate 0.1 floatRate 0.1 vaiPirce 0.5 * 1e18', async () => {
             await comptroller._setBaseRate(bigNumber17)
             await comptroller._setFloatRate(bigNumber17)
             await priceOracle.setDirectPrice(vai.address, bigNumber17.mul(5))
-            expect(await comptroller.getVAIRepayAmount(user1.address)).to.eq(bigNumber18.mul(115))
+            expect(await comptrollerLens.getVAIRepayAmount(comptroller.address, user1.address)).to.eq(bigNumber18.mul(115))
         })
     })
 
@@ -229,20 +231,20 @@ describe('Comptroller', async () => {
         })
 
         it('success for zero rate', async () => {
-            expect(await comptroller.getVAICalculateRepayAmount(user1.address, bigNumber18.mul(50))).to.eq(bigNumber18.mul(50))
+            expect(await comptrollerLens.getVAICalculateRepayAmount(comptroller.address, user1.address, bigNumber18.mul(50))).to.eq(bigNumber18.mul(50))
         })
 
         it('success for baseRate 0.1 floatRate 0.1 vaiPirce 1e18', async () => {
             await comptroller._setBaseRate(bigNumber17)
             await comptroller._setFloatRate(bigNumber17)
-            expect(await comptroller.getVAICalculateRepayAmount(user1.address, bigNumber18.mul(110))).to.eq(bigNumber18.mul(100))
+            expect(await comptrollerLens.getVAICalculateRepayAmount(comptroller.address, user1.address, bigNumber18.mul(110))).to.eq(bigNumber18.mul(100))
         })
 
         it('success for baseRate 0.1 floatRate 0.1 vaiPirce 0.5 * 1e18', async () => {
             await comptroller._setBaseRate(bigNumber17)
             await comptroller._setFloatRate(bigNumber17)
             await priceOracle.setDirectPrice(vai.address, bigNumber17.mul(5))
-            expect(await comptroller.getVAICalculateRepayAmount(user1.address, bigNumber18.mul(115))).to.eq(bigNumber18.mul(100))
+            expect(await comptrollerLens.getVAICalculateRepayAmount(comptroller.address, user1.address, bigNumber18.mul(115))).to.eq(bigNumber18.mul(100))
         })
     })
 

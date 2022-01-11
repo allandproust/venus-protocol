@@ -14,6 +14,7 @@
     "test": "./script/test",
     "test:prepare": "NO_RUN=true ./script/test",
     "checksize": "npx run ./script/saddle/comptrollerSize.js",
+    "checksize:all": "npx run ./script/saddle/contractSizeReport.js",
     "compile:hardhat": "hardhat compile",
     "test:hardhat": "hardhat test",
     "clean:hardhat": "hardhat clean"

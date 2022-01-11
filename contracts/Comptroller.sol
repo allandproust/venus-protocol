@@ -3,18 +3,18 @@ pragma solidity ^0.5.16;
 import "./VToken.sol";
 import "./ErrorReporter.sol";
 import "./PriceOracle.sol";
-import "./CarefulMath.sol";
 import "./ComptrollerInterface.sol";
 import "./ComptrollerStorage.sol";
 import "./Unitroller.sol";
 import "./Governance/XVS.sol";
 import "./VAI/VAI.sol";
+import "./ComptrollerLensInterface.sol";
 
 /**
  * @title Venus's Comptroller Contract
  * @author Venus
  */
-contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, ComptrollerErrorReporter, ExponentialNoError, CarefulMath {
+contract Comptroller is ComptrollerV7Storage, ComptrollerInterfaceG2, ComptrollerErrorReporter, ExponentialNoError {
     /// @notice Emitted when an admin supports a market
     event MarketListed(VToken vToken);
 
@@ -529,7 +529,7 @@ contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, Comptrolle
         if (address(vTokenBorrowed) != address(vaiController)) {
             borrowBalance = VToken(vTokenBorrowed).borrowBalanceStored(borrower);
         } else {
-            borrowBalance = getVAIRepayAmount(borrower);
+            borrowBalance = comptrollerLens.getVAIRepayAmount(address(this), borrower);
         }
 
         uint maxClose = mul_ScalarTruncate(Exp({mantissa: closeFactorMantissa}), borrowBalance);
@@ -680,91 +680,6 @@ contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, Comptrolle
         }
     }
 
-    /*** Liquidity/Liquidation Calculations ***/
-
-    /**
-     * @dev Local vars for avoiding stack-depth limits in calculating account liquidity.
-     *  Note that `vTokenBalance` is the number of vTokens the account owns in the market,
-     *  whereas `borrowBalance` is the amount of underlying that the account has borrowed.
-     */
-    struct AccountLiquidityLocalVars {
-        uint sumCollateral;
-        uint sumBorrowPlusEffects;
-        uint vTokenBalance;
-        uint borrowBalance;
-        uint exchangeRateMantissa;
-        uint oraclePriceMantissa;
-        Exp collateralFactor;
-        Exp exchangeRate;
-        Exp oraclePrice;
-        Exp tokensToDenom;
-    }
-
-    function getVAIRepayRate() public view returns (uint) {
-        MathError mErr;
-        uint rate = 1e18;
-        if (baseRateMantissa > 0) {
-            if (floatRateMantissa > 0) {
-                uint oraclePrice = oracle.assetPrices(vaiController.getVAIAddress());
-                if (1e18 >= oraclePrice) {
-                    uint delta;
-                    (mErr, delta) = subUInt(1e18, oraclePrice);
-                    require(mErr == MathError.NO_ERROR, "VAI_REPAY_RATE_CALCULATION_FAILED");
-
-                    (mErr, delta) = mulUInt(delta, floatRateMantissa);
-                    require(mErr == MathError.NO_ERROR, "VAI_REPAY_RATE_CALCULATION_FAILED");
-
-                    (mErr, delta) = divUInt(delta, 1e18);
-                    require(mErr == MathError.NO_ERROR, "VAI_REPAY_RATE_CALCULATION_FAILED");
-
-                    (mErr, rate) = addUInt(rate, delta);
-                    require(mErr == MathError.NO_ERROR, "VAI_REPAY_RATE_CALCULATION_FAILED");
-                }
-            }
-            (mErr, rate) = addUInt(rate, baseRateMantissa);
-            require(mErr == MathError.NO_ERROR, "VAI_REPAY_RATE_CALCULATION_FAILED");
-        }
-        return rate;
-    }
-
-    /**
-     * @dev Get the VAI actual total amount of repayment by the user
-     */
-    function getVAIRepayAmount(address account) public view returns (uint) {
-        MathError mErr;
-        uint amount = mintedVAIs[account];
-        uint rate = getVAIRepayRate();
-        
-        (mErr, amount) = mulUInt(rate, amount);
-        require(mErr == MathError.NO_ERROR, "VAI_TOTAL_REPAY_AMOUNT_CALCULATION_FAILED");
-
-        (mErr, amount) = divUInt(amount, 1e18);
-        require(mErr == MathError.NO_ERROR, "VAI_TOTAL_REPAY_AMOUNT_CALCULATION_FAILED");
-
-        return amount;
-    }
-
-    /**
-     * @dev Calculate the VAI amount of principal repayment
-     */
-    function getVAICalculateRepayAmount(address account, uint repayAmount) public view returns (uint) {
-        MathError mErr;
-        uint amount = repayAmount;
-        uint totalRepayAmount = getVAIRepayAmount(account);
-        
-        if(totalRepayAmount >= repayAmount) {
-            uint rate = getVAIRepayRate();
-            (mErr, repayAmount) = mulUInt(repayAmount, 1e18);
-            require(mErr == MathError.NO_ERROR, "VAI_REPAY_AMOUNT_CALCULATION_FAILED");
-            (mErr, amount) = divUInt(repayAmount, rate);
-            require(mErr == MathError.NO_ERROR, "VAI_REPAY_AMOUNT_CALCULATION_FAILED");
-        } else {
-            amount = mintedVAIs[account];
-        }
-
-        return amount;
-    }
-
     /**
      * @notice Determine the current account liquidity wrt collateral requirements
      * @return (possible error code (semi-opaque),
@@ -813,59 +728,14 @@ contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, Comptrolle
         VToken vTokenModify,
         uint redeemTokens,
         uint borrowAmount) internal view returns (Error, uint, uint) {
-
-        AccountLiquidityLocalVars memory vars; // Holds all our calculation results
-        uint oErr;
-
-        // For each asset the account is in
-        VToken[] memory assets = accountAssets[account];
-        for (uint i = 0; i < assets.length; i++) {
-            VToken asset = assets[i];
-
-            // Read the balances and exchange rate from the vToken
-            (oErr, vars.vTokenBalance, vars.borrowBalance, vars.exchangeRateMantissa) = asset.getAccountSnapshot(account);
-            if (oErr != 0) { // semi-opaque error code, we assume NO_ERROR == 0 is invariant between upgrades
-                return (Error.SNAPSHOT_ERROR, 0, 0);
-            }
-            vars.collateralFactor = Exp({mantissa: markets[address(asset)].collateralFactorMantissa});
-            vars.exchangeRate = Exp({mantissa: vars.exchangeRateMantissa});
-
-            // Get the normalized price of the asset
-            vars.oraclePriceMantissa = oracle.getUnderlyingPrice(asset);
-            if (vars.oraclePriceMantissa == 0) {
-                return (Error.PRICE_ERROR, 0, 0);
-            }
-            vars.oraclePrice = Exp({mantissa: vars.oraclePriceMantissa});
-
-            // Pre-compute a conversion factor from tokens -> bnb (normalized price value)
-            vars.tokensToDenom = mul_(mul_(vars.collateralFactor, vars.exchangeRate), vars.oraclePrice);
-
-            // sumCollateral += tokensToDenom * vTokenBalance
-            vars.sumCollateral = mul_ScalarTruncateAddUInt(vars.tokensToDenom, vars.vTokenBalance, vars.sumCollateral);
-
-            // sumBorrowPlusEffects += oraclePrice * borrowBalance
-            vars.sumBorrowPlusEffects = mul_ScalarTruncateAddUInt(vars.oraclePrice, vars.borrowBalance, vars.sumBorrowPlusEffects);
-
-            // Calculate effects of interacting with vTokenModify
-            if (asset == vTokenModify) {
-                // redeem effect
-                // sumBorrowPlusEffects += tokensToDenom * redeemTokens
-                vars.sumBorrowPlusEffects = mul_ScalarTruncateAddUInt(vars.tokensToDenom, redeemTokens, vars.sumBorrowPlusEffects);
-
-                // borrow effect
-                // sumBorrowPlusEffects += oraclePrice * borrowAmount
-                vars.sumBorrowPlusEffects = mul_ScalarTruncateAddUInt(vars.oraclePrice, borrowAmount, vars.sumBorrowPlusEffects);
-            }
-        }
-
-        vars.sumBorrowPlusEffects = add_(vars.sumBorrowPlusEffects, getVAIRepayAmount(account));
-
-        // These are safe, as the underflow condition is checked first
-        if (vars.sumCollateral > vars.sumBorrowPlusEffects) {
-            return (Error.NO_ERROR, vars.sumCollateral - vars.sumBorrowPlusEffects, 0);
-        } else {
-            return (Error.NO_ERROR, 0, vars.sumBorrowPlusEffects - vars.sumCollateral);
-        }
+        (uint err, uint liquidity, uint shortfall) = comptrollerLens.getHypotheticalAccountLiquidity(
+            address(this),
+            account,
+            vTokenModify,
+            redeemTokens,
+            borrowAmount
+        );
+        return (Error(err), liquidity, shortfall);
     }
 
     /**
@@ -877,32 +747,12 @@ contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, Comptrolle
      * @return (errorCode, number of vTokenCollateral tokens to be seized in a liquidation)
      */
     function liquidateCalculateSeizeTokens(address vTokenBorrowed, address vTokenCollateral, uint actualRepayAmount) external view returns (uint, uint) {
-        /* Read oracle prices for borrowed and collateral markets */
-        uint priceBorrowedMantissa = oracle.getUnderlyingPrice(VToken(vTokenBorrowed));
-        uint priceCollateralMantissa = oracle.getUnderlyingPrice(VToken(vTokenCollateral));
-        if (priceBorrowedMantissa == 0 || priceCollateralMantissa == 0) {
-            return (uint(Error.PRICE_ERROR), 0);
-        }
-
-        /*
-         * Get the exchange rate and calculate the number of collateral tokens to seize:
-         *  seizeAmount = actualRepayAmount * liquidationIncentive * priceBorrowed / priceCollateral
-         *  seizeTokens = seizeAmount / exchangeRate
-         *   = actualRepayAmount * (liquidationIncentive * priceBorrowed) / (priceCollateral * exchangeRate)
-         */
-        uint exchangeRateMantissa = VToken(vTokenCollateral).exchangeRateStored(); // Note: reverts on error
-        uint seizeTokens;
-        Exp memory numerator;
-        Exp memory denominator;
-        Exp memory ratio;
-
-        numerator = mul_(Exp({mantissa: liquidationIncentiveMantissa}), Exp({mantissa: priceBorrowedMantissa}));
-        denominator = mul_(Exp({mantissa: priceCollateralMantissa}), Exp({mantissa: exchangeRateMantissa}));
-        ratio = div_(numerator, denominator);
-
-        seizeTokens = mul_ScalarTruncate(ratio, actualRepayAmount);
-
-        return (uint(Error.NO_ERROR), seizeTokens);
+        (uint err, uint seizeTokens) = comptrollerLens.liquidateCalculateSeizeTokens(
+            address(this), 
+            vTokenBorrowed, 
+            vTokenCollateral, 
+            actualRepayAmount);
+        return (err, seizeTokens);
     }
 
     /**
@@ -913,32 +763,11 @@ contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, Comptrolle
      * @return (errorCode, number of vTokenCollateral tokens to be seized in a liquidation)
      */
     function liquidateVAICalculateSeizeTokens(address vTokenCollateral, uint actualRepayAmount) external view returns (uint, uint) {
-        /* Read oracle prices for borrowed and collateral markets */
-        uint priceBorrowedMantissa = 1e18;  // Note: this is VAI
-        uint priceCollateralMantissa = oracle.getUnderlyingPrice(VToken(vTokenCollateral));
-        if (priceCollateralMantissa == 0) {
-            return (uint(Error.PRICE_ERROR), 0);
-        }
-
-        /*
-         * Get the exchange rate and calculate the number of collateral tokens to seize:
-         *  seizeAmount = actualRepayAmount * liquidationIncentive * priceBorrowed / priceCollateral
-         *  seizeTokens = seizeAmount / exchangeRate
-         *   = actualRepayAmount * (liquidationIncentive * priceBorrowed) / (priceCollateral * exchangeRate)
-         */
-        uint exchangeRateMantissa = VToken(vTokenCollateral).exchangeRateStored(); // Note: reverts on error
-        uint seizeTokens;
-        Exp memory numerator;
-        Exp memory denominator;
-        Exp memory ratio;
-
-        numerator = mul_(Exp({mantissa: liquidationIncentiveMantissa}), Exp({mantissa: priceBorrowedMantissa}));
-        denominator = mul_(Exp({mantissa: priceCollateralMantissa}), Exp({mantissa: exchangeRateMantissa}));
-        ratio = div_(numerator, denominator);
-
-        seizeTokens = mul_ScalarTruncate(ratio, actualRepayAmount);
-
-        return (uint(Error.NO_ERROR), seizeTokens);
+        (uint err, uint seizeTokens) = comptrollerLens.liquidateVAICalculateSeizeTokens(
+            address(this), 
+            vTokenCollateral, 
+            actualRepayAmount);
+        return (err, seizeTokens);
     }
 
     /*** Admin Functions ***/
@@ -1289,6 +1118,14 @@ contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, Comptrolle
     }
 
     /**
+     * @dev Set ComptrollerLens contract address
+     */
+    function _setComptrollerLens(ComptrollerLensInterface comptrollerLens_) external {
+        require(address(comptrollerLens_) != address(0), "can't be zero address");
+        comptrollerLens = comptrollerLens_;
+    }
+
+    /**
      * @notice Accrue XVS to the market by updating the supply index
      * @param vToken The market whose supply index to update
      */
@@ -1444,14 +1281,14 @@ contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, Comptrolle
                 updateVenusBorrowIndex(address(vToken), borrowIndex);
                 for (j = 0; j < holders.length; j++) {
                     distributeBorrowerVenus(address(vToken), holders[j], borrowIndex);
-                    venusAccrued[holders[j]] = grantXVSStrictlyInternal(holders[j], venusAccrued[holders[j]], shortfalls[j], collateral);
+                    venusAccrued[holders[j]] = grantXVSInternal(holders[j], venusAccrued[holders[j]], shortfalls[j], collateral);
                 }
             }
             if (suppliers) {
                 updateVenusSupplyIndex(address(vToken));
                 for (j = 0; j < holders.length; j++) {
                     distributeSupplierVenus(address(vToken), holders[j]);
-                    venusAccrued[holders[j]] = grantXVSStrictlyInternal(holders[j], venusAccrued[holders[j]], shortfalls[j], collateral);
+                    venusAccrued[holders[j]] = grantXVSInternal(holders[j], venusAccrued[holders[j]], shortfalls[j], collateral);
                 }
             }
         }
@@ -1468,23 +1305,6 @@ contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, Comptrolle
     }
 
     /**
-     * @notice Transfer XVS to the user
-     * @dev Note: If there is not enough XVS, we do not perform the transfer all.
-     * @param user The address of the user to transfer XVS to
-     * @param amount The amount of XVS to (possibly) transfer
-     * @return The amount of XVS which was NOT transferred to the user
-     */
-    function grantXVSInternal(address user, uint amount) internal returns (uint) {
-        XVS xvs = XVS(getXVSAddress());
-        uint venusRemaining = xvs.balanceOf(address(this));
-        if (amount > 0 && amount <= venusRemaining) {
-            xvs.transfer(user, amount);
-            return 0;
-        }
-        return amount;
-    }
-
-    /**
      * @notice Transfer XVS to the user with user's shortfall considered
      * @dev Note: If there is not enough XVS, we do not perform the transfer all.
      * @param user The address of the user to transfer XVS to
@@ -1493,7 +1313,7 @@ contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, Comptrolle
      * @param collateral Whether or not we will use user's venus reward as collateral to pay off the debt
      * @return The amount of XVS which was NOT transferred to the user
      */
-    function grantXVSStrictlyInternal(address user, uint amount, uint shortfall, bool collateral) internal returns (uint) {
+    function grantXVSInternal(address user, uint amount, uint shortfall, bool collateral) internal returns (uint) {
         XVS xvs = XVS(getXVSAddress());
         uint venusRemaining = xvs.balanceOf(address(this));
         bool bankrupt = shortfall > 0;
@@ -1535,7 +1355,7 @@ contract Comptroller is ComptrollerV6Storage, ComptrollerInterfaceG2, Comptrolle
      */
     function _grantXVS(address recipient, uint amount) public {
         require(adminOrInitializing(), "only admin can grant xvs");
-        uint amountLeft = grantXVSInternal(recipient, amount);
+        uint amountLeft = grantXVSInternal(recipient, amount, 0, false);
         require(amountLeft == 0, "insufficient xvs for grant");
         emit VenusGranted(recipient, amount);
     }

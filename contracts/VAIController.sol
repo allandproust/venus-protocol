@@ -7,6 +7,7 @@ import "./Exponential.sol";
 import "./VAIControllerStorage.sol";
 import "./VAIUnitroller.sol";
 import "./VAI/VAI.sol";
+import "./ComptrollerLensInterface.sol";
 
 interface ComptrollerImplInterface {
     function protocolPaused() external view returns (bool);
@@ -17,10 +18,11 @@ interface ComptrollerImplInterface {
     function getAssetsIn(address account) external view returns (VToken[] memory);
     function oracle() external view returns (PriceOracle);
 
-    function getVAIRepayAmount(address account) external view returns (uint);
-    function getVAICalculateRepayAmount(address account, uint repayAmount) external view returns (uint);
     function receiver() external view returns (address);
+
+    function comptrollerLens() external view returns (ComptrollerLensInterface);
 }
+
 
 /**
  * @title Venus's VAI Comptroller Contract
@@ -167,7 +169,9 @@ contract VAIController is VAIControllerStorageG2, VAIControllerErrorReporter, Ex
         MathError mErr;
 
         uint vaiBalanceBorrower = ComptrollerImplInterface(address(comptroller)).mintedVAIs(borrower);
-        actualBurnAmount = ComptrollerImplInterface(address(comptroller)).getVAICalculateRepayAmount(borrower, repayAmount);
+        ComptrollerLensInterface comptrollerLens = ComptrollerImplInterface(address(comptroller)).comptrollerLens();
+
+        actualBurnAmount = comptrollerLens.getVAICalculateRepayAmount(address(comptroller), borrower, repayAmount);
         uint interestAmount;
         (mErr, interestAmount) = subUInt(repayAmount, actualBurnAmount);
         require(mErr == MathError.NO_ERROR, "VAI_BURN_AMOUNT_CALCULATION_FAILED");

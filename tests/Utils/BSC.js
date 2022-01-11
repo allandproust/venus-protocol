@@ -30,8 +30,12 @@ async function bnbGasCost(receipt) {
 function bnbExp(num) { return bnbMantissa(num, 1e18) }
 function bnbDouble(num) { return bnbMantissa(num, 1e36) }
 function bnbMantissa(num, scale = 1e18) {
-  if (num < 0)
+  if (num instanceof ethers.BigNumber) {
+    return num;
+  }
+  if (num < 0) {
     return ethers.BigNumber.from(new BigNum(2).pow(256).plus(num).toFixed());
+  }
   return ethers.BigNumber.from(new BigNum(num).times(scale).toFixed());
 }
 function bnbUnsigned(num) {
